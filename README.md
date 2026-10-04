@@ -1,1 +1,46 @@
-# AP-2026-Project-Template
+# Project Template
+
+This repository is a template for **group and individual contributions**.
+
+## Getting Started
+
+This repository **must be forked**.
+Do not create a new repository from scratch.
+You can rename the fork afterward if desired.
+
+When initializing a library or binary crate, you must add the following crate-level attributes to the crate root:
+
+- For a library crate, add them to `src/lib.rs`.
+- For a binary crate, add them to `src/main.rs`.
+
+```
+#![deny(unsafe_code)]
+#![deny(clippy::pedantic)]
+```
+
+These rules are part of the project's coding standards and must be present from the beginning of development.
+
+## README Requirements
+
+You may modify this `README.md` to document your project.
+At a minimum, clearly specify:
+
+* The **group name**.
+* Which **component(s)** your repository implements.
+* Who **contributed to which component(s)**.
+
+Feel free to add any additional information that helps explain the project, its structure, or how to use it.
+
+## AGENTS.md
+
+**Do not modify `AGENTS.md`.**
+It contains the development workflow and instructions that must remain intact.
+
+## Rules for code in this repository
+
+These are the project's coding principles, and here they are enforced rather than encouraged.
+
+- **No `unsafe`.**
+- **No undocumented panics.** If a function can panic, say so in its doc comment and say when. Most things in here should not panic at all.
+- **rustfmt.** Configure your editor.
+- Before committing, `cargo fmt --all` must pass. If it does not pass, and the latest commit is not authored by the current user, make a single commit: `style: format code`.
