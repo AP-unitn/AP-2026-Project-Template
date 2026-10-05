@@ -1,6 +1,6 @@
 # Project Template
 
-This repository is a template for **group and individual contributions**.
+This repository is a template for **group and individual contributions** for the Advanced Programming course project, A.Y. 2026/2027.
 
 ## Getting Started
 
