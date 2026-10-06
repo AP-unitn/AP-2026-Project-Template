@@ -33,8 +33,12 @@ Feel free to add any additional information that helps explain the project, its 
 
 ## AGENTS.md
 
-**Do not modify `AGENTS.md`.**
-It contains the development workflow and instructions that must remain intact.
+You can modify `AGENTS.md`, but the current content must be kept as is.
+
+## CLAUDE.md
+
+`CLAUDE.md` must import `@AGENTS.md` at the top.
+Do not remove it.
 
 ## Rules for code in this repository
 
