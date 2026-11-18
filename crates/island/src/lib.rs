@@ -1,16 +1,14 @@
-mod island;
+#![deny(unsafe_code)]
+#![deny(clippy::pedantic)]
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use protocol::IslandInit;
+
+pub type IslandFactory = fn(IslandInit) -> IslandType;
+
+#[derive(Debug)]
+pub enum IslandType {
+    Generous(Generous),
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+#[derive(Debug)]
+pub struct Generous;
