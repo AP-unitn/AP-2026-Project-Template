@@ -28,10 +28,9 @@ impl DefaultChart {
     /// check if the game is over
     fn check_ending(&self, closed: Round) -> Option<Ending> {
         if let Some(winner) = self.winner {
-            let winner_cell = self.ships.get(&winner)?.cell;
             return Some(Ending::Declared {
                 winner,
-                cell: winner_cell,
+                cell: self.treasure,
             });
         }
         if self.afloat().is_empty() {
