@@ -37,7 +37,7 @@ impl DefaultChart {
         if self.afloat().is_empty() {
             return Some(Ending::NobodyAfloat);
         }
-        if closed == self.params.round_cap {
+        if closed >= self.params.round_cap {
             return Some(Ending::RoundCap);
         }
         None
