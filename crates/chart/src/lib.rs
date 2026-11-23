@@ -764,7 +764,7 @@ impl Chart for DefaultChart {
 
     ///Took the game to the next round
     fn advance_round(&mut self) -> Vec<Report> {
-        todo!()
+        self.close_round()
     }
 
     fn view_for(&self, ship: ShipId) -> Option<ShipView> {
