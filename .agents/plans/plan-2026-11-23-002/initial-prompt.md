@@ -14,3 +14,6 @@ The numbered corrections and the idiomatic changes refer to a review of
 with: "Do you think there are better, more idiomatic ways, or corrections that could be made in
 `crates/chart/src/rounds.rs` (ignore the documentation for now)? Do not modify the file
 directly."
+
+Later in the same conversation, the user asked to drop the idiomatic changes and keep only the
+corrections. This directory describes what was finally kept.
