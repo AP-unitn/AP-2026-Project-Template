@@ -13,7 +13,7 @@ impl DefaultChart {
             return Vec::new();
         }
         let closed = self.round;
-        self.round += 1;
+        self.round = closed.saturating_add(1);
 
         let reports = self.islands_turn();
         self.ending = self.check_ending(closed);
