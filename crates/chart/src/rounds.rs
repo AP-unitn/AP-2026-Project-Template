@@ -1,8 +1,7 @@
 //! This file wrap all the chart function between two rounds in a game.
 
-use protocol::{Clue, Outcome, Placing, Report, Round};
+use protocol::{Outcome, Placing, Report, Round};
 use std::cmp::Reverse;
-use std::collections::BTreeSet;
 
 use crate::DefaultChart;
 use crate::state::{Ending, ShipState, Status};
@@ -29,23 +28,27 @@ impl DefaultChart {
     /// check if the game is over
     fn check_ending(&self, closed: Round) -> Option<Ending> {
         if let Some(winner) = self.winner {
-            Some(Ending::Declared {
+            return Some(Ending::Declared {
                 winner,
                 cell: self.treasure,
-            })
-        } else if !self.ships.values().any(ShipState::is_afloat) {
-            Some(Ending::NobodyAfloat)
-        } else if closed >= self.params.round_cap {
-            Some(Ending::RoundCap)
-        } else {
-            None
+            });
         }
+        if self.afloat().is_empty() {
+            return Some(Ending::NobodyAfloat);
+        }
+        if closed >= self.params.round_cap {
+            return Some(Ending::RoundCap);
+        }
+        None
     }
 
     /// describe the ending retuning an `Outcome`
     pub(crate) fn describe(&self, ending: &Ending) -> Outcome {
-        match *ending {
-            Ending::Declared { winner, cell } => Outcome::Won { winner, cell },
+        match ending {
+            Ending::Declared { winner, cell } => Outcome::Won {
+                winner: *winner,
+                cell: *cell,
+            },
             Ending::NobodyAfloat => Outcome::Ranked {
                 nobody_afloat: true,
                 ranking: self.ranking(),
@@ -59,28 +62,33 @@ impl DefaultChart {
 
     /// Build the ranking
     fn ranking(&self) -> Vec<Placing> {
-        let mut ranking: Vec<Placing> = self
-            .ships
-            .iter()
-            .map(|(&ship, state)| Placing {
-                ship,
-                full_strength: self.full_strength(state),
-                sunk: !state.is_afloat(),
-            })
-            .collect();
-        ranking.sort_by_key(|p| (Reverse(p.full_strength), p.ship));
-        ranking
+        let mut rank: Vec<Placing> = Vec::new();
+        for (ship_id, ship_state) in self.ships.iter() {
+            match ship_state.status {
+                Status::Sunk { full_strength } => rank.push(Placing {
+                    ship: *ship_id,
+                    full_strength,
+                    sunk: true,
+                }),
+                Status::Afloat => {
+                    let full_strength = self.full_strength(ship_state);
+                    rank.push(Placing {
+                        ship: *ship_id,
+                        full_strength,
+                        sunk: false,
+                    })
+                }
+            }
+        }
+        rank.sort_by_key(|p| (Reverse(p.full_strength), p.ship));
+        rank
     }
 
     /// Return the score of a ship after it was sunk
     pub(crate) fn full_strength(&self, ship: &ShipState) -> u32 {
-        match ship.status {
-            Status::Sunk { full_strength } => full_strength,
-            Status::Afloat => {
-                let issued: BTreeSet<Clue> = self.islands.values().map(|slot| slot.clue).collect();
-                let held = ship.clues.intersection(&issued).count();
-                u32::try_from(held).unwrap_or(u32::MAX)
-            }
-        }
+        ship.clues
+            .iter()
+            .filter(|clue| self.islands.values().any(|island_slot| island_slot.clue == **clue))
+            .count() as u32
     }
 }
