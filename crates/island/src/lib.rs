@@ -1,14 +1,13 @@
 #![deny(unsafe_code)]
-#![deny(clippy::pedantic)]
 
-use protocol::IslandInit;
+mod island;
 
-pub type IslandFactory = fn(IslandInit) -> IslandType;
+pub use island::DefaultIsland;
 
-#[derive(Debug)]
-pub enum IslandType {
-    Generous(Generous),
-}
+use protocol::{Island, IslandInit};
 
-#[derive(Debug)]
-pub struct Generous;
+/// Builds one concrete Island and hands it to the Chart behind a trait object, so the Chart
+/// works with any type that implements `Island`.
+/// `Send` is added here because the shared `Island` trait does not require it,
+/// while the Chart must be `Send`.
+pub type IslandFactory = fn(IslandInit) -> Box<dyn Island + Send>;

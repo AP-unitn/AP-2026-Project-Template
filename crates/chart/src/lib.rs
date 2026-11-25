@@ -7,10 +7,10 @@ mod state;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use island::{Generous, IslandFactory, IslandType};
+use island::{DefaultIsland, IslandFactory};
 use protocol::{
-    Action, Axis, Bound, Cell, Chart, Clue, DefaultMap, Event, GenError, IslandAnswer, IslandId, IslandInit, Map,
-    Outcome, Params, Rejection, Report, Round, Seed, ShipId, ShipView, SpectatorView, Terrain,
+    Action, Axis, Bound, Cell, Chart, Clue, DefaultMap, Event, GenError, Island, IslandId, IslandInit, IslandResponse,
+    Map, Outcome, Params, Rejection, Report, Round, Seed, ShipId, ShipView, SpectatorView, Terrain, visible,
 };
 
 pub use actions::ValidatedAction;
@@ -18,7 +18,12 @@ pub use actions::ValidatedAction;
 use crate::state::Status;
 use state::{Ending, IslandSlot, ShipState};
 
-const ISLANDS: &[IslandFactory] = &[|_| IslandType::Generous(Generous)];
+/// The Islands `generate` builds: the i-th Island of the map comes from `ISLANDS[i % len]`.
+/// One factory, so every Island is a `DefaultIsland` for now.
+const ISLANDS: &[IslandFactory] = &[|init| Box::new(<DefaultIsland as Island>::new(init))];
+
+/// Hull points one shot takes: fixed and never random (Main 5.5).
+const BOMBARD_DAMAGE: u32 = 1;
 
 /// Generate the map, validate all the actions and contains all the state of the game.
 pub struct DefaultChart {
@@ -575,10 +580,9 @@ impl DefaultChart {
                 .map(|(i, (id, footprint))| {
                     let factory = islands[i % islands.len()];
                     let island = factory(IslandInit {
-                        id,
                         clue: *clues.get(i).unwrap(),
-                        footprint: footprint.clone(),
                         seed: seed.wrapping_add(u64::from(id.0)),
+                        params: *params,
                     });
                     (
                         id,
@@ -619,11 +623,79 @@ impl DefaultChart {
         todo!()
     }
 
+    /// # Panics
+    ///
+    /// If `ship` or `killer` is not in the game, or if `ship` is moored at an Island that does
+    /// not exist; `validate` and `apply` rule all three out.
+    fn sink(&mut self, ship: ShipId, killer: Option<ShipId>) -> Vec<Report> {
+        let victim = self.ships.get(&ship).expect("only a Ship in the game can sink");
+        let full_strength = self.full_strength(victim);
+
+        let victim = self.ships.get_mut(&ship).expect("only a Ship in the game can sink");
+        victim.hull = 0;
+        victim.status = Status::Sunk { full_strength };
+        victim.proposal = None;
+        let cell = victim.cell;
+        let clues = std::mem::take(&mut victim.clues);
+        let moored_at = victim.moored_at.take();
+        let ally = victim.ally.take();
+
+        if let Some(island) = moored_at {
+            self.islands
+                .get_mut(&island)
+                .expect("a Ship is only moored at an existing Island")
+                .island
+                .leave_berth(ship);
+        }
+        if let Some(ally) = ally.and_then(|id| self.ships.get_mut(&id)) {
+            ally.ally = None;
+        }
+        if let Some(killer) = killer {
+            self.ships
+                .get_mut(&killer)
+                .expect("the killer is a Ship in the game")
+                .clues
+                .extend(clues);
+        }
+
+        vec![Report {
+            to: self.onlookers(cell),
+            event: Event::Sunk { ship },
+        }]
+    }
+
+    /// Every Ship afloat that sees `cell`, from its own cell or from its ally's.
+    fn onlookers(&self, cell: Cell) -> BTreeSet<ShipId> {
+        let sees_from = |from: Cell| visible(&self.map, from, cell, self.params.vision_range);
+        self.ships
+            .iter()
+            .filter(|(_, state)| state.is_afloat())
+            .filter(|(_, state)| {
+                sees_from(state.cell)
+                    || state
+                        .ally
+                        .and_then(|id| self.ships.get(&id))
+                        .is_some_and(|ally| sees_from(ally.cell))
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
     /// Moves `ship` into `to`.
     fn do_move(&mut self, ship: ShipId, to: Cell) -> Vec<Report> {
         let ship_state = self.ships.get_mut(&ship).unwrap();
         ship_state.cell = to;
-        ship_state.moored_at = None;
+        if let Some(moored_at) = ship_state.moored_at {
+            self.islands.get_mut(&moored_at).unwrap().island.leave_berth(ship);
+            ship_state.moored_at = None;
+        }
+        if self.map.terrain(to) == Some(Terrain::Rock) {
+            ship_state.hull = ship_state.hull.saturating_sub(self.params.hull_strength.div_ceil(2));
+            if ship_state.hull == 0 {
+                self.sink(ship, None);
+            }
+        }
+
         vec![Report {
             to: BTreeSet::from([ship]),
             event: Event::Moved { ship, to },
@@ -633,6 +705,8 @@ impl DefaultChart {
     fn do_moor(&mut self, ship: ShipId, island: IslandId) -> Vec<Report> {
         let ship_state = self.ships.get_mut(&ship).unwrap();
         ship_state.moored_at = Some(island);
+        self.islands.get_mut(&island).unwrap().island.moor(ship);
+
         vec![Report {
             to: BTreeSet::from([ship]),
             event: Event::Moored { ship, island },
@@ -640,51 +714,59 @@ impl DefaultChart {
     }
 
     fn give_clue(&mut self, ship: ShipId) -> Vec<Report> {
-        //right now give to the ship the full strenght clue.
-        //TODO: when the island is developed, this function will use
-        // an `island.ask_clue()` function
         let ship_state = self.ships.get_mut(&ship).unwrap();
-        if let Some(island_id) = ship_state.moored_at {
-            let clue = self.islands.get(&island_id).unwrap().clue;
-            ship_state.clues.insert(clue);
-
-            vec![Report {
-                to: BTreeSet::from([ship]),
-                event: Event::Answered {
-                    island: island_id,
-                    answer: IslandAnswer::Clue(clue),
-                },
-            }]
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn hitted(&mut self, ship: ShipId, target: ShipId) -> Vec<Report> {
-        // Used this order (calculating new_hull and full_strength -> update the actual hull and set the status)
-        // because of the mutable borrowing needed fot target_state.
-
-        let new_hull = self.ships.get(&target).unwrap().hull.saturating_sub(1);
-        let full_strength = if new_hull == 0 {
-            self.full_strength(self.ships.get(&target).unwrap())
-        } else {
-            0
+        let Some(island_id) = ship_state.moored_at else {
+            return Vec::new();
         };
 
-        let target_state = self.ships.get_mut(&target).unwrap();
-        target_state.hull = new_hull;
+        let answer = self.islands.get_mut(&island_id).unwrap().island.ask_clue(ship);
 
-        if new_hull == 0 {
-            target_state.status = Status::Sunk { full_strength };
+        if let IslandResponse::Respond(clue) = answer {
+            ship_state.clues.insert(clue);
         }
 
         vec![Report {
             to: BTreeSet::from([ship]),
-            event: Event::Hit {
-                target,
-                hull: target_state.hull,
+            event: Event::Answered {
+                island: island_id,
+                answer,
             },
         }]
+    }
+
+    /// # Panics
+    ///
+    /// If `target` is not in the game; `validate` rules this out.
+    fn hitted(&mut self, ship: ShipId, target: ShipId) -> Vec<Report> {
+        let target_state = self
+            .ships
+            .get_mut(&target)
+            .expect("validate guarantees the target exists");
+        target_state.hull = target_state.hull.saturating_sub(BOMBARD_DAMAGE);
+        let hull = target_state.hull;
+        let target_cell = target_state.cell;
+
+        // The victim sees its own cell, so it is among the onlookers while afloat.
+        let mut told_of_shot = self.onlookers(target_cell);
+        told_of_shot.remove(&ship);
+        if hull == 0 {
+            told_of_shot.remove(&target);
+        }
+
+        let mut reports = vec![
+            Report {
+                to: told_of_shot,
+                event: Event::Fired { by: ship, target },
+            },
+            Report {
+                to: BTreeSet::from([ship]),
+                event: Event::Hit { target, hull },
+            },
+        ];
+        if hull == 0 {
+            reports.extend(self.sink(target, Some(ship)));
+        }
+        reports
     }
 
     fn alliance_propose(&mut self, ship: ShipId, target: ShipId) -> Vec<Report> {
@@ -699,9 +781,11 @@ impl DefaultChart {
         todo!()
     }
 
+    /// # Panics
+    ///
+    /// If `ship` is not in the game; `validate` rules this out.
     fn do_declare(&mut self, ship: ShipId) -> Vec<Report> {
-        let target_state = self.ships.get(&ship).unwrap();
-        let declared_cell = target_state.cell;
+        let declared_cell = self.get_ship_cell(ship).expect("validate guarantees the ship exists");
         if self.treasure == declared_cell {
             self.winner = Some(ship);
         }
@@ -713,6 +797,20 @@ impl DefaultChart {
                 cell: declared_cell,
             },
         }]
+    }
+
+    fn get_ship_cell(&self, ship: ShipId) -> Option<Cell> {
+        Some(self.ships.get(&ship)?.cell)
+    }
+
+    /// Every Ship afloat, other than `viewer`, in a cell visible from `from`.
+    fn ships_in_sight(&self, viewer: ShipId, from: Cell) -> BTreeMap<ShipId, Cell> {
+        self.ships
+            .iter()
+            .filter(|(id, state)| **id != viewer && state.is_afloat())
+            .filter(|(_, state)| visible(&self.map, from, state.cell, self.params.vision_range))
+            .map(|(id, state)| (*id, state.cell))
+            .collect()
     }
 }
 
@@ -755,6 +853,7 @@ impl Chart for DefaultChart {
             (ship, Action::AskClue) => self.give_clue(ship),
             (ship, Action::Bombard { target }) => self.hitted(ship, target),
             (ship, Action::ProposeAlliance { to }) => self.alliance_propose(ship, to),
+            (ship, Action::AcceptAlliance { proposer }) => self.alliance_accept(ship, proposer),
             (ship, Action::BreakAlliance) => self.alliance_break(ship),
             (ship, Action::Declare) => self.do_declare(ship),
             (ship, Action::Hold) => Vec::new(),
@@ -767,8 +866,23 @@ impl Chart for DefaultChart {
         self.close_round()
     }
 
+    /// Give the ShipView to the relative ship
     fn view_for(&self, ship: ShipId) -> Option<ShipView> {
-        todo!()
+        let me = self.ships.get(&ship).filter(|state| state.is_afloat())?;
+        let mut ship_position = self.ships_in_sight(ship, me.cell);
+        ship_position.insert(ship, me.cell);
+
+        if let Some(ally) = me.ally.and_then(|id| self.ships.get(&id)) {
+            ship_position.extend(self.ships_in_sight(ship, ally.cell));
+        }
+
+        Some(ShipView {
+            ship_position,
+            hull: me.hull,
+            clues: me.clues.clone(),
+            ally: me.ally,
+            moored_at: me.moored_at,
+        })
     }
 
     fn spectator_view(&self) -> SpectatorView {
@@ -776,6 +890,6 @@ impl Chart for DefaultChart {
     }
 
     fn outcome(&self) -> Option<Outcome> {
-        todo!()
+        Some(self.describe(self.ending.as_ref()?))
     }
 }

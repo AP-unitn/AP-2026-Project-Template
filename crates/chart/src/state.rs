@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
-use island::IslandType;
-use protocol::{Cell, Clue, IslandId, ShipId};
+use protocol::{Cell, Clue, Island, IslandId, ShipId};
 
 ///Contains all the information about the actual state of a ship.
 pub(crate) struct ShipState {
@@ -44,8 +43,8 @@ pub(crate) struct IslandSlot {
     pub(crate) footprint: BTreeSet<Cell>,
     ///The clue of the Island
     pub(crate) clue: Clue,
-    ///The type of the island
-    pub(crate) island: IslandType,
+    ///The Island itself, of any type that implements `Island`
+    pub(crate) island: Box<dyn Island + Send>,
 }
 
 ///All the possible endings

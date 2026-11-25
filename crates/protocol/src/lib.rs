@@ -62,62 +62,7 @@ pub fn wind_at(_weather_seed: Seed, _round: Round) -> Direction {
 
 // ---------------------------------------------------------------- Protocol 6.1
 
-/// A predicate over cells (Protocol 6.1).
-#[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub enum Clue {
-    /// The Treasure is at most `radius` from `centre`.
-    Within { centre: Cell, radius: u32 },
-    /// The Treasure is further than `radius` from `centre`.
-    Beyond { centre: Cell, radius: u32 },
-    /// The Treasure's coordinate on `axis` respects `bound`.
-    HalfPlane { axis: Axis, bound: Bound },
-    /// The Treasure is strictly nearer `a` than `b`.
-    Nearer { a: Cell, b: Cell },
-}
-
-/// One of the three hex axes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub enum Axis {
-    /// The `q` coordinate.
-    Q,
-    /// The `r` coordinate.
-    R,
-    /// The `s` coordinate.
-    S,
-}
-
-/// A floor or a ceiling on one axis.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub enum Bound {
-    /// Coordinate `>=` the value.
-    AtLeast(i32),
-    /// Coordinate `<=` the value.
-    AtMost(i32),
-}
-
-impl Clue {
-    /// Whether `cell` satisfies this Clue. Pure and total on cells of a map.
-    #[must_use]
-    pub fn holds(self, cell: Cell) -> bool {
-        match self {
-            Clue::Within { centre, radius } => cell.distance(centre) <= radius,
-            Clue::Beyond { centre, radius } => cell.distance(centre) > radius,
-            Clue::HalfPlane { axis, bound } => {
-                let v = match axis {
-                    Axis::Q => cell.q,
-                    Axis::R => cell.r,
-                    Axis::S => cell.s(),
-                };
-                match bound {
-                    Bound::AtLeast(k) => v >= k,
-                    Bound::AtMost(k) => v <= k,
-                }
-            }
-            Clue::Nearer { a, b } => cell.distance(a) < cell.distance(b),
-        }
-    }
-}
+pub use common::clues::{Axis, Bound, Clue};
 
 // ---------------------------------------------------------------- Protocol 7.1, 11.1
 
@@ -212,7 +157,7 @@ pub enum Event {
     /// A Ship moored at an Island.
     Moored { ship: ShipId, island: IslandId },
     /// What an Island answered. Told to the asking Ship only.
-    Answered { island: IslandId, answer: IslandAnswer },
+    Answered { island: IslandId, answer: IslandResponse },
     /// Public: told to everybody.
     AllianceFormed { a: ShipId, b: ShipId },
     /// Public: told to everybody.
@@ -232,27 +177,25 @@ pub struct Report {
 
 // ---------------------------------------------------------------- Protocol 13.4 and 13.6 (drafts)
 
-/// What one Ship may know (proposal P1, #110).
+/// What one Ship may know (Main 6.2; #130 made owned).
+///
+/// Only what the Ship cannot work out by itself. The round travels in `RoundOpen` and
+/// `RoundResult`, the wind is `wind_at(weather_seed, round)` with the seed from `Welcome`, the
+/// cells in sight follow from `visible` and `ship_position`, and the outgoing proposal is the
+/// Ship's own choice.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ShipView {
-    /// The round this view is valid for.
-    pub round: Round,
-    /// The wind of that round.
-    pub wind: Direction,
-    /// This Ship's cell.
-    pub cell: Cell,
+    /// Every Ship in a cell this Ship or its ally can see, this Ship and its ally included.
+    /// A Ship out of sight, or sunk, is absent: `get` returns `None` for both.
+    pub ship_position: BTreeMap<ShipId, Cell>,
     /// This Ship's hull.
     pub hull: u32,
     /// Everything this Ship holds.
     pub clues: BTreeSet<Clue>,
     /// Its ally, if any.
     pub ally: Option<ShipId>,
-    /// Its outgoing proposal, if any.
-    pub proposal: Option<ShipId>,
     /// The Island it is moored at, if any.
     pub moored_at: Option<IslandId>,
-    /// Every other Ship in a cell this Ship or its ally can see.
-    pub ships: BTreeMap<ShipId, Cell>,
 }
 
 /// One Ship as the spectator sees it.
@@ -340,53 +283,4 @@ pub enum GenErrItem {
 
 // ---------------------------------------------------------------- Protocol 13.5 (draft, #68)
 
-/// What an Island answers to `AskClue`. None of the four is a rejection (Main 5.3).
-#[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum IslandAnswer {
-    /// Its Clue, possibly weakened, always of the same kind (Main 4.2).
-    Clue(Clue),
-    /// Not yet: this many more rounds moored.
-    Wait { rounds: u32 },
-    /// Not this time.
-    Refuse,
-    /// Nothing further for this Ship.
-    Done,
-}
-
-/// What the Chart tells an Island whenever it calls it.
-#[derive(Clone, Copy, Debug)]
-pub struct IslandContext {
-    /// The current round.
-    pub round: Round,
-}
-
-/// What the Chart hands an Island when it builds it (Main 4.1).
-#[derive(Clone, Debug)]
-pub struct IslandInit {
-    /// Its identifier.
-    pub id: IslandId,
-    /// Its one true Clue, at full strength.
-    pub clue: Clue,
-    /// Its land cells.
-    pub footprint: BTreeSet<Cell>,
-    /// Its own randomness (Main 10.1).
-    pub seed: Seed,
-}
-
-/// The trait every group's Island implements. Draft (#68). `Send` because the Chart moves
-/// into the Admiralty's thread.
-pub trait Island: Send {
-    /// How many Ships may be moored at once; `None` for no limit.
-    fn berths(&self) -> Option<u32>;
-    /// Whether it accepts `ship` now. Asked from `validate`, so it must be pure.
-    fn will_berth(&self, ship: ShipId, ctx: &IslandContext) -> bool;
-    /// `ship` has moored.
-    fn on_moor(&mut self, ship: ShipId, ctx: &IslandContext);
-    /// `ship` left, by moving away or by sinking.
-    fn on_leave(&mut self, ship: ShipId, ctx: &IslandContext);
-    /// `ship`, moored here, asks for the Clue.
-    fn ask_clue(&mut self, ship: ShipId, ctx: &IslandContext) -> IslandAnswer;
-    /// Its turn at the end of every round.
-    fn end_of_round(&mut self, ctx: &IslandContext);
-}
+pub use common::islandtrait::island::{Island, IslandInit, IslandResponse, MoorResponse, RepairHullResponse};

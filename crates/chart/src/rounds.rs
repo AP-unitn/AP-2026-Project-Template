@@ -22,7 +22,10 @@ impl DefaultChart {
 
     /// call every island at the end of the round
     fn islands_turn(&mut self) -> Vec<Report> {
-        todo!() //waiting an island trait
+        self.islands
+            .values_mut()
+            .for_each(|island_slot| island_slot.island.round_advance(self.round));
+        Vec::new()
     }
 
     /// check if the game is over
