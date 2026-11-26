@@ -8,13 +8,9 @@ mod state;
 use std::collections::{BTreeMap, BTreeSet};
 
 use island::{DefaultIsland, IslandFactory};
-use protocol::{
-    Action, Axis, Bound, Cell, Chart, Clue, DefaultMap, Event, GenError, Island, IslandId, IslandInit, IslandResponse,
-    Map, Outcome, Params, Rejection, Report, Round, Seed, ShipId, ShipView, SpectatorView, Terrain, visible,
-};
+use protocol::{visible, Action, Axis, Bound, Cell, Chart, Clue, DefaultMap, Direction, Event, GenError, Island, IslandId, IslandInit, IslandResponse, Map, Outcome, Params, Rejection, Report, Round, Seed, ShipId, ShipView, SpectatorView, Terrain, MoorResponse};
 
 pub use actions::ValidatedAction;
-
 use crate::state::Status;
 use state::{Ending, IslandSlot, ShipState};
 
@@ -812,6 +808,179 @@ impl DefaultChart {
             .map(|(id, state)| (*id, state.cell))
             .collect()
     }
+
+    fn move_direction(current_cell:  Cell, to: &Cell) -> Option<Direction> {
+        let dq = to.q.checked_sub(current_cell.q)?;
+        let dr = to.r.checked_sub(current_cell.r)?;
+
+        match (dq, dr) {
+            (1, 0) => Some(Direction::East),
+            (1, -1) => Some(Direction::NorthEast),
+            (0, -1) => Some(Direction::NorthWest),
+            (-1, 0) => Some(Direction::West),
+            (-1, 1) => Some(Direction::SouthWest),
+            (0, 1) => Some(Direction::SouthEast),
+            _ => None,
+        }
+    }
+
+    fn check_inside_map(&self ,to: &Cell) -> Result<(), Rejection>{
+        if !self.map.contains(*to){
+            Err(Rejection::OutsideArchipelago)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_is_water(&self ,to: &Cell) -> Result<(), Rejection>{
+        if self.map.is_land(*to) {
+            Err(Rejection::CellIsLand)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_wind(&self, move_dir: Direction) -> Result<(), Rejection>{
+        if protocol::wind_at(self.weather_seed, self.round).relative_angle(move_dir) == 3 {
+            Err(Rejection::AgainstTheWind)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_occupied(&self, to: &Cell, ship: ShipId) -> Result<(), Rejection>{
+        if let Some((&other_id, _)) = self.ships.iter()
+            .find(|(other_id, state)|
+                state.cell == *to && state.is_afloat() && **other_id != ship) {
+            Err(Rejection::CellOccupied { by: other_id })
+        }else{
+            Ok(())
+        }
+    }
+
+    fn check_near_island(&self, current_cell: Cell, island: &IslandId) -> Result<(), Rejection> {
+        let neighbours = current_cell.neighbours();
+        if !neighbours.iter().any(|&cell| {self.map.terrain(cell) == Some(Terrain::Island(*island))}){
+            Err(Rejection::NotAdjacentToIsland)
+        }else {
+            Ok(())
+        }
+    }
+
+    fn check_can_moor(&self, land: &IslandSlot, ship: ShipId) -> Result<(), Rejection> {
+        match land.island.can_moor(ship) {
+            MoorResponse::NoBerth => Err(Rejection::NoBerth),
+            MoorResponse::Refused => Err(Rejection::IslandRefused),
+            MoorResponse::Accepted => Ok(()),
+            _ => Err(Rejection::Unsupported),
+        }
+    }
+
+    fn check_already_moored(ship_state: &ShipState) -> Result<(), Rejection> {
+        if ship_state.moored_at.is_some(){
+            Err(Rejection::AlreadyMoored)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_moored(&self, ship_state: &ShipState)-> Result<(), Rejection> {
+        if ship_state.moored_at.is_none(){
+            Err(Rejection::NotMoored)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_target_afloat(target: &ShipState) -> Result<(), Rejection> {
+        if !target.is_afloat(){
+            Err(Rejection::TargetHasSunk)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_visible(&self, ship_state: &ShipState, target: &ShipState)-> Result<(), Rejection> {
+        let own_visible = visible(&self.map, ship_state.cell, target.cell, self.params.vision_range);
+        let ally_visible = ship_state.ally
+            .and_then(|id| self.ships.get(&id))
+            .is_some_and(|ally| {
+                visible(&self.map, ally.cell, target.cell, self.params.vision_range, )
+            });
+
+        if !own_visible && !ally_visible {
+            Err(Rejection::NotVisible)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_distance(&self, ship_state: &ShipState, target: &ShipState)-> Result<(), Rejection> {
+        if ship_state.cell.distance(target.cell) > self.params.bombard_range {
+            Err(Rejection::OutOfRange)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_target_state(&self, to: &ShipId) -> Result<(), Rejection> {
+        let target_state = self.ships.get(to).ok_or(Rejection::NoSuchShip)?;
+        if !target_state.is_afloat() {
+            Err(Rejection::NoSuchShip)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_not_self(ship: ShipId, to: &ShipId) -> Result<(), Rejection> {
+        if *to == ship {
+            Err(Rejection::Unsupported)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_not_allied(ship_state: &ShipState)-> Result<(), Rejection> {
+        if ship_state.ally.is_some(){
+            Err(Rejection::AlreadyAllied)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_proposer_afloat(prop: &ShipState)-> Result<(), Rejection> {
+        if !prop.is_afloat() {
+            Err(Rejection::NoSuchShip)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_proposer_not_allied(prop: &ShipState)-> Result<(), Rejection> {
+        if prop.ally.is_some(){
+            Err(Rejection::ProposerAlreadyAllied)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_proposal_exists(prop: &ShipState, ship: ShipId)-> Result<(), Rejection> {
+        if prop.proposal != Some(ship) {
+            Err(Rejection::NoSuchProposal)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn check_allied(ship_state: &ShipState)-> Result<(), Rejection> {
+        if ship_state.ally.is_none(){
+            Err(Rejection::NotAllied)
+        } else {
+            Ok(())
+        }
+
+    }
+
 }
 
 impl Chart for DefaultChart {
@@ -839,10 +1008,87 @@ impl Chart for DefaultChart {
 
     ///Validate an action
     fn validate(&self, ship: ShipId, action: &Action) -> Result<ValidatedAction, Rejection> {
-        // right now every action is valid
-        // TODO: write an actual validate
 
-        Ok(ValidatedAction::new(ship, *action))
+        let ship_state = self.ships.get(&ship).ok_or(Rejection::NoSuchShip)?;
+        if !ship_state.is_afloat() { return Err(Rejection::NoSuchShip)}
+        let current_cell = ship_state.cell;
+
+        match action {
+            Action::Move { to } => {
+
+                let move_dir = Self::move_direction(current_cell, to).ok_or(Rejection::NotANeighbour)?;
+
+                self.check_inside_map(to)?;
+                self.check_is_water(to)?;
+                self.check_wind(move_dir)?;
+                self.check_occupied(to, ship)?;
+
+                Ok(ValidatedAction::new(ship, *action))
+            }
+            Action::Moor { island } =>{
+
+                let land = self.islands.get(island).ok_or(Rejection::NoSuchIsland)?;
+
+                Self::check_already_moored(ship_state)?;
+                self.check_near_island(current_cell, island)?;
+                self.check_can_moor(land, ship)?;
+
+                Ok(ValidatedAction::new(ship, *action))
+            }
+
+            Action::AskClue => {
+
+                self.check_moored(ship_state)?;
+
+                Ok(ValidatedAction::new(ship, *action))
+
+            }
+            Action::Bombard { target } =>{
+
+                let targ = self.ships.get(target).ok_or(Rejection::NoSuchShip)?;
+
+                self.check_visible(ship_state, targ)?;
+                Self::check_target_afloat(targ)?;
+                self.check_distance(ship_state, targ)?;
+
+                Ok(ValidatedAction::new(ship, *action))
+
+            }
+            Action::ProposeAlliance { to } =>{
+
+                Self::check_not_allied(ship_state)?;
+                self.check_target_state(to)?;
+                Self::check_not_self(ship, to)?;
+
+                Ok(ValidatedAction::new(ship, *action))
+            }
+
+            Action::AcceptAlliance{ proposer } =>{
+
+                Self::check_not_allied(ship_state)?;
+
+                let prop = self.ships.get(proposer).ok_or(Rejection::NoSuchShip)?;
+
+                Self::check_proposer_afloat(prop)?;
+                Self::check_proposer_not_allied(prop)?;
+                Self::check_proposal_exists(prop, ship)?;
+
+                Ok(ValidatedAction::new(ship, *action))
+            }
+
+            Action::BreakAlliance =>{
+
+                Self::check_allied(ship_state)?;
+                Ok(ValidatedAction::new(ship, *action))
+
+            }
+
+            Action::Declare | Action::Hold => {
+                Ok(ValidatedAction::new(ship, *action))
+            }
+
+            _ =>   Err(Rejection::Unsupported)
+        }
     }
 
     ///Apply a validated action

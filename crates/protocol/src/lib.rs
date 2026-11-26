@@ -118,6 +118,10 @@ pub enum Rejection {
     NoBerth,
     /// Moor: the Island turned the Ship away.
     IslandRefused,
+    ///Moor: already moored
+    AlreadyMoored,
+    ///The named Island is not present
+    NoSuchIsland,
     /// `AskClue`: the Ship is not moored.
     NotMoored,
     /// Bombard: the target is beyond `bombard_range`.
@@ -132,6 +136,8 @@ pub enum Rejection {
     NoSuchProposal,
     /// Alliance: nobody to break with.
     NotAllied,
+    ///Alliance: the proposer is already allied with another Ship
+   ProposerAlreadyAllied,
     /// Bombard: the target has sunk.
     TargetHasSunk,
 }
